@@ -231,33 +231,105 @@ macro_rules! log {
     };
 }
 
-macro_rules! __define_tracing_level_macro {
-    ($name:ident, $level:ident) => {
-        #[macro_export]
-        macro_rules! $name {
-            (logger: $logger:expr, target: $target:expr, $($arg:tt)+) => {
-                $crate::log!(logger: $logger, target: $target, $crate::Level::$level, $($arg)+)
-            };
-            (logger: $logger:expr, $($arg:tt)+) => {
-                $crate::log!(logger: $logger, $crate::Level::$level, $($arg)+)
-            };
-            (target: $target:literal, $($arg:tt)+) => {
-                $crate::log!(target: $target, $crate::Level::$level, $($arg)+)
-            };
-            (target: $target:expr, $($arg:tt)+) => {
-                $crate::log!(target: $target, $crate::Level::$level, $($arg)+)
-            };
-            ($($arg:tt)+) => {
-                $crate::log!($crate::Level::$level, $($arg)+)
-            };
-        }
+/// Emits a ERROR-level log event through tracing (or the explicit logger).
+#[macro_export]
+macro_rules! error {
+    (logger: $logger:expr, target: $target:expr, $($arg:tt)+) => {
+        $crate::log!(logger: $logger, target: $target, $crate::Level::Error, $($arg)+)
+    };
+    (logger: $logger:expr, $($arg:tt)+) => {
+        $crate::log!(logger: $logger, $crate::Level::Error, $($arg)+)
+    };
+    (target: $target:literal, $($arg:tt)+) => {
+        $crate::log!(target: $target, $crate::Level::Error, $($arg)+)
+    };
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::log!(target: $target, $crate::Level::Error, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::log!($crate::Level::Error, $($arg)+)
     };
 }
-__define_tracing_level_macro!(error, Error);
-__define_tracing_level_macro!(warn, Warn);
-__define_tracing_level_macro!(info, Info);
-__define_tracing_level_macro!(debug, Debug);
-__define_tracing_level_macro!(trace, Trace);
+
+/// Emits a WARN-level log event through tracing (or the explicit logger).
+#[macro_export]
+macro_rules! warn {
+    (logger: $logger:expr, target: $target:expr, $($arg:tt)+) => {
+        $crate::log!(logger: $logger, target: $target, $crate::Level::Warn, $($arg)+)
+    };
+    (logger: $logger:expr, $($arg:tt)+) => {
+        $crate::log!(logger: $logger, $crate::Level::Warn, $($arg)+)
+    };
+    (target: $target:literal, $($arg:tt)+) => {
+        $crate::log!(target: $target, $crate::Level::Warn, $($arg)+)
+    };
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::log!(target: $target, $crate::Level::Warn, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::log!($crate::Level::Warn, $($arg)+)
+    };
+}
+
+/// Emits a INFO-level log event through tracing (or the explicit logger).
+#[macro_export]
+macro_rules! info {
+    (logger: $logger:expr, target: $target:expr, $($arg:tt)+) => {
+        $crate::log!(logger: $logger, target: $target, $crate::Level::Info, $($arg)+)
+    };
+    (logger: $logger:expr, $($arg:tt)+) => {
+        $crate::log!(logger: $logger, $crate::Level::Info, $($arg)+)
+    };
+    (target: $target:literal, $($arg:tt)+) => {
+        $crate::log!(target: $target, $crate::Level::Info, $($arg)+)
+    };
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::log!(target: $target, $crate::Level::Info, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::log!($crate::Level::Info, $($arg)+)
+    };
+}
+
+/// Emits a DEBUG-level log event through tracing (or the explicit logger).
+#[macro_export]
+macro_rules! debug {
+    (logger: $logger:expr, target: $target:expr, $($arg:tt)+) => {
+        $crate::log!(logger: $logger, target: $target, $crate::Level::Debug, $($arg)+)
+    };
+    (logger: $logger:expr, $($arg:tt)+) => {
+        $crate::log!(logger: $logger, $crate::Level::Debug, $($arg)+)
+    };
+    (target: $target:literal, $($arg:tt)+) => {
+        $crate::log!(target: $target, $crate::Level::Debug, $($arg)+)
+    };
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::log!(target: $target, $crate::Level::Debug, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::log!($crate::Level::Debug, $($arg)+)
+    };
+}
+
+/// Emits a TRACE-level log event through tracing (or the explicit logger).
+#[macro_export]
+macro_rules! trace {
+    (logger: $logger:expr, target: $target:expr, $($arg:tt)+) => {
+        $crate::log!(logger: $logger, target: $target, $crate::Level::Trace, $($arg)+)
+    };
+    (logger: $logger:expr, $($arg:tt)+) => {
+        $crate::log!(logger: $logger, $crate::Level::Trace, $($arg)+)
+    };
+    (target: $target:literal, $($arg:tt)+) => {
+        $crate::log!(target: $target, $crate::Level::Trace, $($arg)+)
+    };
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::log!(target: $target, $crate::Level::Trace, $($arg)+)
+    };
+    ($($arg:tt)+) => {
+        $crate::log!($crate::Level::Trace, $($arg)+)
+    };
+}
 
 /// Check whether a native tracing event would be enabled at a log level.
 #[doc(hidden)]
