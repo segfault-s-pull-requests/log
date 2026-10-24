@@ -19,9 +19,10 @@
 // * The log::set_logger, log::logger, log::max_level and log::set_max_level
 //   runtime APIs still exist, but do not affect native tracing emission.
 //   Static log max_level_* feature filters DO remain in effect.
-// * log KV fields are converted to tracing fields, retaining names and
-//   primitive values. Unsupported types fall back to Debug. Serde/sval
-//   structures are not recursively captured; they fall back to Debug.
+// * log KV fields become tracing fields with the same names; values are
+//   formatted via log::kv::Value (Display). Primitive types are therefore
+//   not preserved as typed tracing values. Serde/sval structures are not
+//   recursively captured.
 //   Dynamic KV key *names* cannot become tracing callsite field names.
 // * Tracing supports at most 32 fields per callsite, including message and
 //   the possible log.target field.
@@ -101,9 +102,7 @@ macro_rules! __log_tracing_kv {
             fields: [
                 $($extra)*
                 $(
-                    $key = $crate::__TracingKvValue(
-                        $crate::__log_value!($key $(:$capture)? = $($value)?)
-                    ),
+                    $key = %$crate::__log_value!($key $(:$capture)? = $($value)?),
                 )+
             ],
             $($fmt)+
@@ -118,82 +117,6 @@ macro_rules! __log_tracing_kv {
     ($($tokens:tt)*) => {
         compile_error!("key value support requires the kv feature of log")
     };
-}
-
-/// Turns log::kv::Value into a native tracing::field::Value, retaining the
-/// primitive type instead of eagerly stringifying all KV values.
-#[cfg(feature = "kv")]
-#[derive(Debug)]
-pub struct __TracingKvValue<'v>(pub crate::kv::Value<'v>);
-
-#[cfg(feature = "kv")]
-impl crate::__tracing::field::Value for __TracingKvValue<'_> {
-    fn record(&self, visitor: &mut dyn crate::__tracing::field::Visit) {
-        struct Bridge<'a>(&'a mut dyn crate::__tracing::field::Visit);
-
-        impl<'v> crate::kv::VisitValue<'v> for Bridge<'_> {
-            fn visit_any(&mut self, value: crate::kv::Value<'v>) -> Result<(), crate::kv::Error> {
-                self.0.record_debug(&value);
-                Ok(())
-            }
-
-            fn visit_null(&mut self) -> Result<(), crate::kv::Error> {
-                self.0.record_debug(&"null");
-                Ok(())
-            }
-
-            fn visit_u64(&mut self, value: u64) -> Result<(), crate::kv::Error> {
-                self.0.record_u64(value);
-                Ok(())
-            }
-
-            fn visit_i64(&mut self, value: i64) -> Result<(), crate::kv::Error> {
-                self.0.record_i64(value);
-                Ok(())
-            }
-
-            fn visit_u128(&mut self, value: u128) -> Result<(), crate::kv::Error> {
-                if let Ok(value) = u64::try_from(value) {
-                    self.0.record_u64(value);
-                } else {
-                    self.0.record_debug(&value);
-                }
-                Ok(())
-            }
-
-            fn visit_i128(&mut self, value: i128) -> Result<(), crate::kv::Error> {
-                if let Ok(value) = i64::try_from(value) {
-                    self.0.record_i64(value);
-                } else {
-                    self.0.record_debug(&value);
-                }
-                Ok(())
-            }
-
-            fn visit_f64(&mut self, value: f64) -> Result<(), crate::kv::Error> {
-                self.0.record_f64(value);
-                Ok(())
-            }
-
-            fn visit_bool(&mut self, value: bool) -> Result<(), crate::kv::Error> {
-                self.0.record_bool(value);
-                Ok(())
-            }
-
-            fn visit_str(&mut self, value: &str) -> Result<(), crate::kv::Error> {
-                self.0.record_str(value);
-                Ok(())
-            }
-
-            fn visit_char(&mut self, value: char) -> Result<(), crate::kv::Error> {
-                let mut bytes = [0; 4];
-                self.0.record_str(value.encode_utf8(&mut bytes));
-                Ok(())
-            }
-        }
-
-        let _ = self.0.visit(Bridge(visitor));
-    }
 }
 
 /// Log using a native tracing event. The logger: forms must use the original
