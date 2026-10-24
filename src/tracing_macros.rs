@@ -410,6 +410,7 @@ mod tests {
 
     // A Subscriber sees file/line/module from the invocation, not from the
     // macro definition. This also exercises emission through the dispatcher.
+    #[cfg(feature = "std")]
     #[test]
     fn original_callsite_metadata() {
         use std::sync::{Arc, Mutex};
