@@ -413,6 +413,19 @@ use std::{cmp, fmt, mem};
 
 #[macro_use]
 mod macros;
+
+#[cfg(feature = "tracing-macros")]
+mod tracing_macros;
+
+// Macro expansions refer to this re-export, so downstream crates do not need
+// to depend on tracing directly.
+#[cfg(feature = "tracing-macros")]
+#[doc(hidden)]
+pub use tracing as __tracing;
+
+#[cfg(all(feature = "tracing-macros", feature = "kv"))]
+#[doc(hidden)]
+pub use tracing_macros::__TracingKvValue;
 mod serde;
 
 #[cfg(feature = "kv")]
