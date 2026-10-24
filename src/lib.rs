@@ -349,6 +349,29 @@
 //! [alterable_logger]: https://docs.rs/alterable_logger/*/alterable_logger
 //! [clang_log]: https://docs.rs/clang_log/latest/clang_log
 //! [ftail]: https://docs.rs/ftail/latest/ftail
+//!
+//! ## Native tracing macro bridge (fork-only feature)
+//!
+//! Enabling the `tracing-macros` feature replaces `log!`, `error!`, `warn!`,
+//! `info!`, `debug!`, `trace!`, and `log_enabled!` with macro expansions that
+//! emit native tracing events at the original file, line, and module path.
+//! Without the feature, the upstream log macros are unchanged.
+//!
+//! Most format arguments and KV capture specifiers work. The exceptions are:
+//!
+//! * A non-literal `target:` expression is captured as the `log.target` field.
+//!   The tracing metadata target is the caller's module, so target filtering
+//!   differs. This includes compile-time expressions that are not literals.
+//! * `logger:` still uses the original log backend: a custom `Log` instance
+//!   cannot receive an ordinary tracing event.
+//! * The global `log` logger and runtime max level do not affect tracing
+//!   subscribers. Compile-time max-level feature filters still apply.
+//! * KV keys map to tracing fields, but their values use formatted Display
+//!   capture instead of native tracing primitive types. Serde/sval structure
+//!   is not preserved. Runtime KV key names and more than 32 fields at a
+//!   callsite are unsupported.
+//! * The optional `tracing/log` forwarding feature may introduce a dependency
+//!   cycle when this fork replaces log transitively.
 
 #![doc(
     html_logo_url = "https://prev.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
@@ -413,6 +436,16 @@ use std::{cmp, fmt, mem};
 
 #[macro_use]
 mod macros;
+
+#[cfg(feature = "tracing-macros")]
+mod tracing_macros;
+
+// Macro expansions refer to this re-export, so downstream crates do not need
+// to depend on tracing directly.
+#[cfg(feature = "tracing-macros")]
+#[doc(hidden)]
+pub use tracing as __tracing;
+
 mod serde;
 
 #[cfg(feature = "kv")]
