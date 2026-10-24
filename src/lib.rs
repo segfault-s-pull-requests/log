@@ -366,9 +366,10 @@
 //!   cannot receive an ordinary tracing event.
 //! * The global `log` logger and runtime max level do not affect tracing
 //!   subscribers. Compile-time max-level feature filters still apply.
-//! * KV values map to primitive tracing fields when possible; complex serde
-//!   and sval values fall back to Debug. Tracing cannot represent runtime
-//!   KV field names, or more than 32 fields at a callsite.
+//! * KV keys map to tracing fields, but their values use formatted Display
+//!   capture instead of native tracing primitive types. Serde/sval structure
+//!   is not preserved. Runtime KV key names and more than 32 fields at a
+//!   callsite are unsupported.
 //! * The optional `tracing/log` forwarding feature may introduce a dependency
 //!   cycle when this fork replaces log transitively.
 
@@ -445,9 +446,6 @@ mod tracing_macros;
 #[doc(hidden)]
 pub use tracing as __tracing;
 
-#[cfg(all(feature = "tracing-macros", feature = "kv"))]
-#[doc(hidden)]
-pub use tracing_macros::__TracingKvValue;
 mod serde;
 
 #[cfg(feature = "kv")]
