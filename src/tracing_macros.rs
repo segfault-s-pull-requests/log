@@ -378,11 +378,19 @@ macro_rules! log_enabled {
     (target: $target:literal, $lvl:expr) => {
         $crate::__log_tracing_enabled!(target: $target, $lvl)
     };
-    (target: $target:expr, $lvl:expr) => {
-        $crate::__log_tracing_enabled!(
-            target: $crate::__private_api::module_path!(), $lvl
-        )
-    };
+    (target: $target:expr, $lvl:expr) => {{
+        let __log_level = $lvl;
+        if __log_level > $crate::STATIC_MAX_LEVEL {
+            false
+        } else {
+            // Preserve evaluation of the caller's target expression, even
+            // though tracing cannot filter on a runtime callsite target.
+            let _ = &$target;
+            $crate::__log_tracing_enabled!(
+                target: $crate::__private_api::module_path!(), __log_level
+            )
+        }
+    }};
     ($lvl:expr) => {
         $crate::__log_tracing_enabled!(
             target: $crate::__private_api::module_path!(), $lvl
