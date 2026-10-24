@@ -70,6 +70,7 @@
 ///
 /// Note that the global level set via Cargo features or through `set_max_level` will
 /// still apply, even when a custom logger is supplied with the `logger` argument.
+#[cfg(not(feature = "tracing-macros"))]
 #[macro_export]
 #[clippy::format_args]
 macro_rules! log {
@@ -160,6 +161,7 @@ macro_rules! __log {
 /// error!(target: "app_events", "App Error: {err_info}, Port: {port}");
 /// error!(logger: my_logger, "App Error: {err_info}, Port: {port}");
 /// ```
+#[cfg(not(feature = "tracing-macros"))]
 #[macro_export]
 #[clippy::format_args]
 macro_rules! error {
@@ -199,6 +201,7 @@ macro_rules! error {
 /// warn!(target: "input_events", "App received warning: {warn_description}");
 /// warn!(logger: my_logger, "App received warning: {warn_description}");
 /// ```
+#[cfg(not(feature = "tracing-macros"))]
 #[macro_export]
 #[clippy::format_args]
 macro_rules! warn {
@@ -247,6 +250,7 @@ macro_rules! warn {
 ///     conn_info.port, conn_info.speed
 /// );
 /// ```
+#[cfg(not(feature = "tracing-macros"))]
 #[macro_export]
 #[clippy::format_args]
 macro_rules! info {
@@ -287,6 +291,7 @@ macro_rules! info {
 /// debug!(target: "app_events", "New position: x: {}, y: {}", pos.x, pos.y);
 /// debug!(logger: my_logger, "New position: x: {}, y: {}", pos.x, pos.y);
 /// ```
+#[cfg(not(feature = "tracing-macros"))]
 #[macro_export]
 #[clippy::format_args]
 macro_rules! debug {
@@ -331,6 +336,7 @@ macro_rules! debug {
 ///        if pos.x >= 0.0 { "positive" } else { "negative" },
 ///        if pos.y >= 0.0 { "positive" } else { "negative" });
 /// ```
+#[cfg(not(feature = "tracing-macros"))]
 #[macro_export]
 #[clippy::format_args]
 macro_rules! trace {
@@ -387,6 +393,7 @@ macro_rules! trace {
 /// ```
 ///
 /// This macro accepts the same `target` and `logger` arguments as [`macro@log`].
+#[cfg(not(feature = "tracing-macros"))]
 #[macro_export]
 macro_rules! log_enabled {
     // log_enabled!(logger: my_logger, target: "my_target", Level::Info)
