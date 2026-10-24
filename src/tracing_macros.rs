@@ -408,6 +408,60 @@ mod tests {
         let _ = crate::log_enabled!(target: "static-target", Level::Info);
     }
 
+    // A Subscriber sees file/line/module from the invocation, not from the
+    // macro definition. This also exercises emission through the dispatcher.
+    #[test]
+    fn original_callsite_metadata() {
+        use std::sync::{Arc, Mutex};
+        use crate::__tracing::{self as tracing, span};
+
+        struct Capture(Arc<Mutex<Vec<(String, u32, String, String)>>>);
+
+        impl tracing::Subscriber for Capture {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+
+            fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
+                span::Id::from_u64(1)
+            }
+
+            fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
+
+            fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
+
+            fn event(&self, event: &tracing::Event<'_>) {
+                let meta = event.metadata();
+                self.0.lock().unwrap().push((
+                    meta.file().unwrap_or("").to_owned(),
+                    meta.line().unwrap_or(0),
+                    meta.module_path().unwrap_or("").to_owned(),
+                    meta.target().to_owned(),
+                ));
+            }
+
+            fn enter(&self, _: &span::Id) {}
+
+            fn exit(&self, _: &span::Id) {}
+        }
+
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing::Dispatch::new(Capture(records.clone()));
+        let expected_file = file!();
+        let expected_module = module_path!();
+        let expected_line = line!() + 2;
+        tracing::dispatcher::with_default(&subscriber, || {
+            crate::info!(target: "explicit-static-target", "caller location");
+        });
+
+        let records = records.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].0, expected_file);
+        assert_eq!(records[0].1, expected_line);
+        assert_eq!(records[0].2, expected_module);
+        assert_eq!(records[0].3, "explicit-static-target");
+    }
+
     #[test]
     fn explicit_logger() {
         let logger = crate::__private_api::GlobalLogger;
