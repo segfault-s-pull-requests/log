@@ -1,8 +1,9 @@
 // Native tracing implementations of log's public macros.
 //
 // The macro bodies expand at the user's invocation site. In particular,
-// tracing::event! expands its file!(), line!(), and module_path!() at that
-// location, not in this file. Do not move emission into a normal Rust function.
+// this file constructs tracing-core events from statics whose file!(),
+// line!(), and module_path!() expand at the caller's location. Do not move
+// emission into a normal Rust function.
 //
 // Compatibility boundaries (enabled only with feature "tracing-macros"):
 //
@@ -24,17 +25,81 @@
 //   not preserved as typed tracing values. Serde/sval structures are not
 //   recursively captured.
 //   Dynamic KV key *names* cannot become tracing callsite field names.
-// * Tracing supports at most 32 fields per callsite, including message and
-//   the possible log.target field.
+// * Large callsite field sets may exceed subscriber or formatter limitations.
 // * The bridge does not preserve the possibility of using native log::Log
 //   and tracing subscribers simultaneously for a single macro invocation.
-//   Enabling tracing's optional "log" forwarding feature can also cause a
-//   Cargo dependency cycle, since this fork of log depends on tracing.
+//   This implementation depends only on tracing-core (never on tracing).
 
-/// Dispatch a log level to one of five compile-time tracing levels.
+/// Builds a real tracing-core callsite and emits an event through the active
+/// dispatcher. Expanding in the caller's source (rather than a function) is
+/// REQUIRED: file!(), line!(), and module_path!() must resolve there.
 ///
-/// Keeping the event! invocation inside this macro (rather than in a function)
-/// preserves the source-site file/line/module in tracing Metadata.
+/// Only strings supplied as literal targets can be placed into the static
+/// metadata. The fields are supplied as name = %Display expressions, with
+/// "message" always the first entry in the field set.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __log_tracing_core_event {
+    (target: $target:expr, level: $level:expr,
+        fields: [$($key:tt = %$value:expr,)*], $($fmt:tt)+
+    ) => {{
+        static __META: $crate::__tracing_core::Metadata<'static> =
+            $crate::__tracing_core::Metadata::new(
+                concat!("event ", file!(), ":", line!()),
+                $target,
+                $level,
+                Some(file!()),
+                Some(line!()),
+                Some(module_path!()),
+                $crate::__tracing_core::field::FieldSet::new(
+                    &["message", $($crate::__log_tracing_key!($key),)*],
+                    $crate::__tracing_core::identify_callsite!(&__CALLSITE),
+                ),
+                $crate::__tracing_core::metadata::Kind::EVENT,
+            );
+        static __CALLSITE: $crate::__tracing_core::callsite::DefaultCallsite =
+            $crate::__tracing_core::callsite::DefaultCallsite::new(&__META);
+        if $level <= $crate::__tracing_core::LevelFilter::current() {
+            let __interest = __CALLSITE.interest();
+            if !__interest.is_never()
+                && (__interest.is_always()
+                    || $crate::__tracing_core::dispatcher::get_default(
+                        |dispatch| dispatch.enabled(&__META)
+                    ))
+            {
+                // An immediately invoked closure keeps temporaries in
+                // format_args! (and KV expressions) alive through dispatch.
+                (|__fields: $crate::__tracing_core::field::ValueSet<'_>| {
+                    $crate::__tracing_core::Event::dispatch(&__META, &__fields);
+                })(__META.fields().value_set_all(&[
+                    Some(
+                        &format_args!($($fmt)+)
+                            as &dyn $crate::__tracing_core::field::Value
+                    ),
+                    $(
+                        Some(
+                            &$crate::__tracing_core::field::display(&$value)
+                                as &dyn $crate::__tracing_core::field::Value
+                        ),
+                    )*
+                ]));
+            }
+        }
+    }};
+}
+
+/// Compile-time metadata names for user KV fields; log permits runtime key
+/// expressions, but tracing-core's callsite names must be static.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __log_tracing_key {
+    ($key:ident) => { stringify!($key) };
+    ($key:literal) => { $key };
+    ($key:tt) => { stringify!($key) };
+}
+
+/// Dispatch runtime log level expressions (evaluated exactly once) to the
+/// five tracing-core levels. Distinct levels have distinct static callsites.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __log_tracing_emit {
@@ -42,25 +107,25 @@ macro_rules! __log_tracing_emit {
         let __log_level = $level;
         if __log_level <= $crate::STATIC_MAX_LEVEL {
             match __log_level {
-                $crate::Level::Error => $crate::__tracing::event!(
-                    target: $target, $crate::__tracing::Level::ERROR,
-                    { $($field)* }, $($fmt)+
+                $crate::Level::Error => $crate::__log_tracing_core_event!(
+                    target: $target, level: $crate::__tracing_core::Level::ERROR,
+                    fields: [$($field)*], $($fmt)+
                 ),
-                $crate::Level::Warn => $crate::__tracing::event!(
-                    target: $target, $crate::__tracing::Level::WARN,
-                    { $($field)* }, $($fmt)+
+                $crate::Level::Warn => $crate::__log_tracing_core_event!(
+                    target: $target, level: $crate::__tracing_core::Level::WARN,
+                    fields: [$($field)*], $($fmt)+
                 ),
-                $crate::Level::Info => $crate::__tracing::event!(
-                    target: $target, $crate::__tracing::Level::INFO,
-                    { $($field)* }, $($fmt)+
+                $crate::Level::Info => $crate::__log_tracing_core_event!(
+                    target: $target, level: $crate::__tracing_core::Level::INFO,
+                    fields: [$($field)*], $($fmt)+
                 ),
-                $crate::Level::Debug => $crate::__tracing::event!(
-                    target: $target, $crate::__tracing::Level::DEBUG,
-                    { $($field)* }, $($fmt)+
+                $crate::Level::Debug => $crate::__log_tracing_core_event!(
+                    target: $target, level: $crate::__tracing_core::Level::DEBUG,
+                    fields: [$($field)*], $($fmt)+
                 ),
-                $crate::Level::Trace => $crate::__tracing::event!(
-                    target: $target, $crate::__tracing::Level::TRACE,
-                    { $($field)* }, $($fmt)+
+                $crate::Level::Trace => $crate::__log_tracing_core_event!(
+                    target: $target, level: $crate::__tracing_core::Level::TRACE,
+                    fields: [$($field)*], $($fmt)+
                 ),
             }
         }
@@ -68,7 +133,7 @@ macro_rules! __log_tracing_emit {
 }
 
 /// Convert log KV grammar to tracing fields, keeping the raw formatting
-/// tokens available for the tracing event! macro.
+/// tokens available for format_args! at the original callsite.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __log_tracing {
@@ -143,7 +208,7 @@ macro_rules! log {
     (target: $target:expr, $lvl:expr, $($arg:tt)+) => {
         $crate::__log_tracing!(
             target: $crate::__private_api::module_path!(), $lvl,
-            fields: [log.target = %$target,], $($arg)+
+            fields: ["log.target" = %$target,], $($arg)+
         )
     };
     ($lvl:expr, $($arg:tt)+) => {
@@ -254,7 +319,43 @@ macro_rules! trace {
     };
 }
 
-/// Check whether a native tracing event would be enabled at a log level.
+/// Static callsite with EVENT metadata, used by log_enabled!.
+/// As with tracing::event_enabled!, this is a hint and not a promise that an
+/// event will be accepted by subscriber-side value filtering.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __log_tracing_core_enabled {
+    (target: $target:expr, level: $level:expr) => {{
+        static __META: $crate::__tracing_core::Metadata<'static> =
+            $crate::__tracing_core::Metadata::new(
+                concat!("enabled ", file!(), ":", line!()),
+                $target,
+                $level,
+                Some(file!()),
+                Some(line!()),
+                Some(module_path!()),
+                $crate::__tracing_core::field::FieldSet::new(
+                    &["message"],
+                    $crate::__tracing_core::identify_callsite!(&__CALLSITE),
+                ),
+                $crate::__tracing_core::metadata::Kind::EVENT,
+            );
+        static __CALLSITE: $crate::__tracing_core::callsite::DefaultCallsite =
+            $crate::__tracing_core::callsite::DefaultCallsite::new(&__META);
+        if $level <= $crate::__tracing_core::LevelFilter::current() {
+            let __interest = __CALLSITE.interest();
+            !__interest.is_never()
+                && (__interest.is_always()
+                    || $crate::__tracing_core::dispatcher::get_default(
+                        |dispatch| dispatch.enabled(&__META)
+                    ))
+        } else {
+            false
+        }
+    }};
+}
+
+/// Tests whether a tracing event may be enabled at this source callsite.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __log_tracing_enabled {
@@ -264,20 +365,20 @@ macro_rules! __log_tracing_enabled {
             false
         } else {
             match __log_level {
-                $crate::Level::Error => $crate::__tracing::event_enabled!(
-                    target: $target, $crate::__tracing::Level::ERROR
+                $crate::Level::Error => $crate::__log_tracing_core_enabled!(
+                    target: $target, level: $crate::__tracing_core::Level::ERROR
                 ),
-                $crate::Level::Warn => $crate::__tracing::event_enabled!(
-                    target: $target, $crate::__tracing::Level::WARN
+                $crate::Level::Warn => $crate::__log_tracing_core_enabled!(
+                    target: $target, level: $crate::__tracing_core::Level::WARN
                 ),
-                $crate::Level::Info => $crate::__tracing::event_enabled!(
-                    target: $target, $crate::__tracing::Level::INFO
+                $crate::Level::Info => $crate::__log_tracing_core_enabled!(
+                    target: $target, level: $crate::__tracing_core::Level::INFO
                 ),
-                $crate::Level::Debug => $crate::__tracing::event_enabled!(
-                    target: $target, $crate::__tracing::Level::DEBUG
+                $crate::Level::Debug => $crate::__log_tracing_core_enabled!(
+                    target: $target, level: $crate::__tracing_core::Level::DEBUG
                 ),
-                $crate::Level::Trace => $crate::__tracing::event_enabled!(
-                    target: $target, $crate::__tracing::Level::TRACE
+                $crate::Level::Trace => $crate::__log_tracing_core_enabled!(
+                    target: $target, level: $crate::__tracing_core::Level::TRACE
                 ),
             }
         }
@@ -345,7 +446,7 @@ mod tests {
     #[test]
     fn original_callsite_metadata() {
         use std::sync::{Arc, Mutex};
-        use crate::__tracing::{self as tracing, span};
+        use crate::__tracing_core::{self as tracing, span};
 
         struct Capture(Arc<Mutex<Vec<(String, u32, String, String)>>>);
 

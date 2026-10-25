@@ -354,7 +354,7 @@
 //!
 //! Enabling the `tracing-macros` feature replaces `log!`, `error!`, `warn!`,
 //! `info!`, `debug!`, `trace!`, and `log_enabled!` with macro expansions that
-//! emit native tracing events at the original file, line, and module path.
+//! emit native tracing-core events at the original file, line, and module path.
 //! Without the feature, the upstream log macros are unchanged.
 //!
 //! Most format arguments and KV capture specifiers work. The exceptions are:
@@ -370,8 +370,8 @@
 //!   capture instead of native tracing primitive types. Serde/sval structure
 //!   is not preserved. Runtime KV key names and more than 32 fields at a
 //!   callsite are unsupported.
-//! * The optional `tracing/log` forwarding feature may introduce a dependency
-//!   cycle when this fork replaces log transitively.
+//! * Emission uses tracing-core directly to avoid a circular dependency on
+//!   tracing (whose optional log integration depends on this facade).
 
 #![doc(
     html_logo_url = "https://prev.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
@@ -444,7 +444,7 @@ mod tracing_macros;
 // to depend on tracing directly.
 #[cfg(feature = "tracing-macros")]
 #[doc(hidden)]
-pub use tracing as __tracing;
+pub use tracing_core as __tracing_core;
 
 mod serde;
 
