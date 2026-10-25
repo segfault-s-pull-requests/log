@@ -1,8 +1,9 @@
 // Native tracing implementations of log's public macros.
 //
 // The macro bodies expand at the user's invocation site. In particular,
-// tracing::event! expands its file!(), line!(), and module_path!() at that
-// location, not in this file. Do not move emission into a normal Rust function.
+// this file constructs tracing-core events from statics whose file!(),
+// line!(), and module_path!() expand at the caller's location. Do not move
+// emission into a normal Rust function.
 //
 // Compatibility boundaries (enabled only with feature "tracing-macros"):
 //
@@ -24,8 +25,7 @@
 //   not preserved as typed tracing values. Serde/sval structures are not
 //   recursively captured.
 //   Dynamic KV key *names* cannot become tracing callsite field names.
-// * Tracing supports at most 32 fields per callsite, including message and
-//   the possible log.target field.
+// * Large callsite field sets may exceed subscriber or formatter limitations.
 // * The bridge does not preserve the possibility of using native log::Log
 //   and tracing subscribers simultaneously for a single macro invocation.
 //   This implementation depends only on tracing-core (never on tracing).
@@ -133,7 +133,7 @@ macro_rules! __log_tracing_emit {
 }
 
 /// Convert log KV grammar to tracing fields, keeping the raw formatting
-/// tokens available for the tracing event! macro.
+/// tokens available for format_args! at the original callsite.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __log_tracing {
