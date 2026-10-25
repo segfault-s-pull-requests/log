@@ -457,4 +457,8 @@ enum Type {
 fn regression_issue_494() {
     use self::Type::*;
     all_log_macros!("some message: {:?}, {:?}", None, Some);
+    // Enabled checks must also tolerate caller-defined Option variant names.
+    let _ = log::log_enabled!(log::Level::Info);
+    #[cfg(feature = "kv")]
+    all_log_macros!(value:? = Some; "shadowed structured value");
 }

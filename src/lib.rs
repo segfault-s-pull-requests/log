@@ -448,6 +448,10 @@ mod macros;
 #[cfg(feature = "tracing-macros")]
 mod tracing_macros;
 
+// This vendored facade requires native tracing emission in every build.
+#[cfg(not(feature = "tracing-macros"))]
+compile_error!("this vendored log crate requires the `tracing-macros` feature");
+
 // Macro expansions refer to this re-export, so downstream crates do not need
 // to depend on tracing directly.
 #[cfg(feature = "tracing-macros")]

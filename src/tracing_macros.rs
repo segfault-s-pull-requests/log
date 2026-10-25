@@ -164,14 +164,15 @@ macro_rules! __log_tracing_core_event {
         fields: [$($key:tt = %$value:expr,)*],
         $fmt:expr $(, $($fmt_arg:tt)*)?
     ) => {{
+        // Qualify Option variants so caller imports cannot shadow macro internals.
         static __META: $crate::__tracing_core::Metadata<'static> =
             $crate::__tracing_core::Metadata::new(
                 concat!("event ", file!(), ":", line!()),
                 $target,
                 $level,
-                Some(file!()),
-                Some(line!()),
-                Some(module_path!()),
+                $crate::__tracing_core::__macro_support::Option::Some(file!()),
+                $crate::__tracing_core::__macro_support::Option::Some(line!()),
+                $crate::__tracing_core::__macro_support::Option::Some(module_path!()),
                 $crate::__tracing_core::field::FieldSet::new(
                     &["message", $($crate::__log_tracing_key!($key),)*],
                     $crate::__tracing_core::identify_callsite!(&__CALLSITE),
@@ -204,12 +205,12 @@ macro_rules! __log_tracing_core_event {
                 (|__fields: $crate::__tracing_core::field::ValueSet<'_>| {
                     $crate::__tracing_core::Event::dispatch(&__META, &__fields);
                 })(__META.fields().value_set_all(&[
-                    Some(
+                    $crate::__tracing_core::__macro_support::Option::Some(
                         &format_args!($fmt $(, $($fmt_arg)*)?)
                             as &dyn $crate::__tracing_core::field::Value
                     ),
                     $(
-                        Some(
+                        $crate::__tracing_core::__macro_support::Option::Some(
                             &$crate::__tracing_core::field::display(&$value)
                                 as &dyn $crate::__tracing_core::field::Value
                         ),
@@ -636,14 +637,15 @@ macro_rules! trace {
 #[macro_export]
 macro_rules! __log_tracing_core_enabled {
     (target: $target:expr, level: $level:expr) => {{
+        // Qualify Option variants so caller imports cannot shadow macro internals.
         static __META: $crate::__tracing_core::Metadata<'static> =
             $crate::__tracing_core::Metadata::new(
                 concat!("enabled ", file!(), ":", line!()),
                 $target,
                 $level,
-                Some(file!()),
-                Some(line!()),
-                Some(module_path!()),
+                $crate::__tracing_core::__macro_support::Option::Some(file!()),
+                $crate::__tracing_core::__macro_support::Option::Some(line!()),
+                $crate::__tracing_core::__macro_support::Option::Some(module_path!()),
                 $crate::__tracing_core::field::FieldSet::new(
                     &["message"],
                     $crate::__tracing_core::identify_callsite!(&__CALLSITE),
@@ -652,6 +654,8 @@ macro_rules! __log_tracing_core_enabled {
             );
         static __CALLSITE: $crate::__tracing_core::callsite::DefaultCallsite =
             $crate::__tracing_core::callsite::DefaultCallsite::new(&__META);
+        // This creates a filtering-only callsite without adding it to the
+        // recording table: log_enabled! queries the subscriber but emits no event.
         if $level <= $crate::__tracing_core::LevelFilter::current() {
             let __interest = __CALLSITE.interest();
             !__interest.is_never()
