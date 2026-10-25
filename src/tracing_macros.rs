@@ -36,12 +36,15 @@
 ///
 /// Only strings supplied as literal targets can be placed into the static
 /// metadata. The fields are supplied as name = %Display expressions, with
-/// "message" always the first entry in the field set.
+/// "message" always the first entry in the field set. The format template
+/// and recovered invocation source are exported through tracing-core as a
+/// side record in the same special ELF section as tracing events.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __log_tracing_core_event {
     (target: $target:expr, level: $level:expr,
-        fields: [$($key:tt = %$value:expr,)*], $($fmt:tt)+
+        fields: [$($key:tt = %$value:expr,)*],
+        $fmt:expr $(, $($fmt_arg:tt)*)?
     ) => {{
         static __META: $crate::__tracing_core::Metadata<'static> =
             $crate::__tracing_core::Metadata::new(
@@ -59,6 +62,17 @@ macro_rules! __log_tracing_core_event {
             );
         static __CALLSITE: $crate::__tracing_core::callsite::DefaultCallsite =
             $crate::__tracing_core::callsite::DefaultCallsite::new(&__META);
+        // Share exactly the same linker record and source extractor used by
+        // tracing::event!. Source extraction happens at this macro expansion
+        // site, not in a function, preserving the outer invocation when Rust
+        // exposes the necessary span ancestry.
+        static __TRACING_SOURCE: &str =
+            $crate::__tracing_core::__tracing_capture_source!([]; $fmt $(, $($fmt_arg)*)?);
+        $crate::__tracing_core::__tracing_record_metadata!(
+            __META;
+            $crate::__tracing_core::__macro_support::Option::Some($fmt);
+            $crate::__tracing_core::__macro_support::Option::Some(__TRACING_SOURCE)
+        );
         if $level <= $crate::__tracing_core::LevelFilter::current() {
             let __interest = __CALLSITE.interest();
             if !__interest.is_never()
@@ -73,7 +87,7 @@ macro_rules! __log_tracing_core_event {
                     $crate::__tracing_core::Event::dispatch(&__META, &__fields);
                 })(__META.fields().value_set_all(&[
                     Some(
-                        &format_args!($($fmt)+)
+                        &format_args!($fmt $(, $($fmt_arg)*)?)
                             as &dyn $crate::__tracing_core::field::Value
                     ),
                     $(
@@ -130,6 +144,63 @@ macro_rules! __log_tracing_emit {
             }
         }
     }};
+}
+
+/// Emit a single static callsite for log's fixed-severity macros.
+///
+/// This is separate from the dynamic log! dispatcher because each of the
+/// five possible runtime levels requires its own static Metadata. A known
+/// severity must NOT generate five redundant records in the linker section.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __log_tracing_fixed {
+    (target: $target:expr, log_level: $log_lvl:expr, tracing_level: $tracing_lvl:expr,
+        fields: [$($extra:tt)*],
+        $($key:tt $(:$capture:tt)? $(= $value:expr)?),+; $($fmt:tt)+
+    ) => {
+        $crate::__log_tracing_fixed_kv!(
+            target: $target, log_level: $log_lvl, tracing_level: $tracing_lvl,
+            fields: [$($extra)*], $($key $(:$capture)? $(= $value)?),+; $($fmt)+
+        )
+    };
+    (target: $target:expr, log_level: $log_lvl:expr, tracing_level: $tracing_lvl:expr,
+        fields: [$($extra:tt)*], $($fmt:tt)+
+    ) => {{
+        if $log_lvl <= $crate::STATIC_MAX_LEVEL {
+            $crate::__log_tracing_core_event!(
+                target: $target, level: $tracing_lvl,
+                fields: [$($extra)*], $($fmt)+
+            )
+        }
+    }};
+}
+
+#[cfg(feature = "kv")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __log_tracing_fixed_kv {
+    (target: $target:expr, log_level: $log_lvl:expr, tracing_level: $tracing_lvl:expr,
+        fields: [$($extra:tt)*],
+        $($key:tt $(:$capture:tt)? $(= $value:expr)?),+; $($fmt:tt)+
+    ) => {
+        $crate::__log_tracing_fixed!(
+            target: $target, log_level: $log_lvl, tracing_level: $tracing_lvl,
+            fields: [
+                $($extra)*
+                $( $key = %$crate::__log_value!($key $(:$capture)? = $($value)?), )+
+            ],
+            $($fmt)+
+        )
+    };
+}
+
+#[cfg(not(feature = "kv"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __log_tracing_fixed_kv {
+    ($($tokens:tt)*) => {
+        compile_error!("key value support requires the kv feature of log")
+    };
 }
 
 /// Convert log KV grammar to tracing fields, keeping the raw formatting
@@ -229,13 +300,27 @@ macro_rules! error {
         $crate::log!(logger: $logger, $crate::Level::Error, $($arg)+)
     };
     (target: $target:literal, $($arg:tt)+) => {
-        $crate::log!(target: $target, $crate::Level::Error, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $target, log_level: $crate::Level::Error,
+            tracing_level: $crate::__tracing_core::Level::ERROR,
+            fields: [], $($arg)+
+        )
     };
     (target: $target:expr, $($arg:tt)+) => {
-        $crate::log!(target: $target, $crate::Level::Error, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $crate::__private_api::module_path!(),
+            log_level: $crate::Level::Error,
+            tracing_level: $crate::__tracing_core::Level::ERROR,
+            fields: ["log.target" = %$target,], $($arg)+
+        )
     };
     ($($arg:tt)+) => {
-        $crate::log!($crate::Level::Error, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $crate::__private_api::module_path!(),
+            log_level: $crate::Level::Error,
+            tracing_level: $crate::__tracing_core::Level::ERROR,
+            fields: [], $($arg)+
+        )
     };
 }
 
@@ -249,13 +334,27 @@ macro_rules! warn {
         $crate::log!(logger: $logger, $crate::Level::Warn, $($arg)+)
     };
     (target: $target:literal, $($arg:tt)+) => {
-        $crate::log!(target: $target, $crate::Level::Warn, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $target, log_level: $crate::Level::Warn,
+            tracing_level: $crate::__tracing_core::Level::WARN,
+            fields: [], $($arg)+
+        )
     };
     (target: $target:expr, $($arg:tt)+) => {
-        $crate::log!(target: $target, $crate::Level::Warn, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $crate::__private_api::module_path!(),
+            log_level: $crate::Level::Warn,
+            tracing_level: $crate::__tracing_core::Level::WARN,
+            fields: ["log.target" = %$target,], $($arg)+
+        )
     };
     ($($arg:tt)+) => {
-        $crate::log!($crate::Level::Warn, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $crate::__private_api::module_path!(),
+            log_level: $crate::Level::Warn,
+            tracing_level: $crate::__tracing_core::Level::WARN,
+            fields: [], $($arg)+
+        )
     };
 }
 
@@ -269,13 +368,27 @@ macro_rules! info {
         $crate::log!(logger: $logger, $crate::Level::Info, $($arg)+)
     };
     (target: $target:literal, $($arg:tt)+) => {
-        $crate::log!(target: $target, $crate::Level::Info, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $target, log_level: $crate::Level::Info,
+            tracing_level: $crate::__tracing_core::Level::INFO,
+            fields: [], $($arg)+
+        )
     };
     (target: $target:expr, $($arg:tt)+) => {
-        $crate::log!(target: $target, $crate::Level::Info, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $crate::__private_api::module_path!(),
+            log_level: $crate::Level::Info,
+            tracing_level: $crate::__tracing_core::Level::INFO,
+            fields: ["log.target" = %$target,], $($arg)+
+        )
     };
     ($($arg:tt)+) => {
-        $crate::log!($crate::Level::Info, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $crate::__private_api::module_path!(),
+            log_level: $crate::Level::Info,
+            tracing_level: $crate::__tracing_core::Level::INFO,
+            fields: [], $($arg)+
+        )
     };
 }
 
@@ -289,13 +402,27 @@ macro_rules! debug {
         $crate::log!(logger: $logger, $crate::Level::Debug, $($arg)+)
     };
     (target: $target:literal, $($arg:tt)+) => {
-        $crate::log!(target: $target, $crate::Level::Debug, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $target, log_level: $crate::Level::Debug,
+            tracing_level: $crate::__tracing_core::Level::DEBUG,
+            fields: [], $($arg)+
+        )
     };
     (target: $target:expr, $($arg:tt)+) => {
-        $crate::log!(target: $target, $crate::Level::Debug, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $crate::__private_api::module_path!(),
+            log_level: $crate::Level::Debug,
+            tracing_level: $crate::__tracing_core::Level::DEBUG,
+            fields: ["log.target" = %$target,], $($arg)+
+        )
     };
     ($($arg:tt)+) => {
-        $crate::log!($crate::Level::Debug, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $crate::__private_api::module_path!(),
+            log_level: $crate::Level::Debug,
+            tracing_level: $crate::__tracing_core::Level::DEBUG,
+            fields: [], $($arg)+
+        )
     };
 }
 
@@ -309,13 +436,27 @@ macro_rules! trace {
         $crate::log!(logger: $logger, $crate::Level::Trace, $($arg)+)
     };
     (target: $target:literal, $($arg:tt)+) => {
-        $crate::log!(target: $target, $crate::Level::Trace, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $target, log_level: $crate::Level::Trace,
+            tracing_level: $crate::__tracing_core::Level::TRACE,
+            fields: [], $($arg)+
+        )
     };
     (target: $target:expr, $($arg:tt)+) => {
-        $crate::log!(target: $target, $crate::Level::Trace, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $crate::__private_api::module_path!(),
+            log_level: $crate::Level::Trace,
+            tracing_level: $crate::__tracing_core::Level::TRACE,
+            fields: ["log.target" = %$target,], $($arg)+
+        )
     };
     ($($arg:tt)+) => {
-        $crate::log!($crate::Level::Trace, $($arg)+)
+        $crate::__log_tracing_fixed!(
+            target: $crate::__private_api::module_path!(),
+            log_level: $crate::Level::Trace,
+            tracing_level: $crate::__tracing_core::Level::TRACE,
+            fields: [], $($arg)+
+        )
     };
 }
 
@@ -442,6 +583,31 @@ mod tests {
 
     // A Subscriber sees file/line/module from the invocation, not from the
     // macro definition. This also exercises emission through the dispatcher.
+    // Verify that shimmed log callsites appear in the exact same section
+    // read by tracing::callsite_table::records(). Each dynamic log level
+    // currently contributes an independent (otherwise equivalent) record.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn linked_callsite_has_template_and_source() {
+        let expected_file = file!();
+        let expected_line = line!() + 1;
+        crate::info!("shim template {}", 2718);
+
+        let records: Vec<_> = crate::__tracing_core::callsite_table::records()
+            .filter(|r| {
+                let Some(metadata) = r.metadata() else { return false; };
+                metadata.file() == Some(expected_file)
+                    && metadata.line() == Some(expected_line)
+            })
+            .collect();
+        assert_eq!(records.len(), 1, "a fixed-severity log callsite must have one ELF record");
+        for record in records {
+            assert_eq!(record.template(), Some("shim template {}"));
+            let source = record.source().expect("source text in linker record");
+            assert!(!source.is_empty(), "source text must not be empty");
+        }
+    }
+
     #[cfg(feature = "std")]
     #[test]
     fn original_callsite_metadata() {

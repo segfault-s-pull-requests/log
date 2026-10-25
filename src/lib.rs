@@ -354,7 +354,8 @@
 //!
 //! Enabling the `tracing-macros` feature replaces `log!`, `error!`, `warn!`,
 //! `info!`, `debug!`, `trace!`, and `log_enabled!` with macro expansions that
-//! emit native tracing-core events at the original file, line, and module path.
+//! emit native tracing-core events at the original file, line, and module path,
+//! with side records containing the format template and best-effort original source.
 //! Without the feature, the upstream log macros are unchanged.
 //!
 //! Most format arguments and KV capture specifiers work. The exceptions are:
@@ -370,8 +371,10 @@
 //!   capture instead of native tracing primitive types. Serde/sval structure
 //!   is not preserved. Runtime KV key names and more than 32 fields at a
 //!   callsite are unsupported.
-//! * Emission uses tracing-core directly to avoid a circular dependency on
-//!   tracing (whose optional log integration depends on this facade).
+//! * Emission uses the shared tracing-core fork for both event dispatch and
+//!   the link-time callsite metadata table. The consuming application must
+//!   use the same tracing-core revision as its tracing dependency so that
+//!   dispatch and section enumeration use a single shared tracing-core crate.
 
 #![doc(
     html_logo_url = "https://prev.rust-lang.org/logos/rust-logo-128x128-blk-v2.png",
