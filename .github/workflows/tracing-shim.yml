@@ -1,0 +1,21 @@
+name: Log-to-tracing shim compatibility
+
+on:
+  push:
+    branches: [feature/direct-tracing-macros]
+  pull_request:
+
+jobs:
+  shim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Standard log macro syntax
+        run: cargo test --features 'std tracing-macros' --test tracing_macros
+      - name: Structured KV capture and dynamic key fallback
+        run: cargo test --features 'std tracing-macros kv' --test tracing_macros
+      - name: Extended log KV capture features
+        run: cargo test --features 'std tracing-macros kv_std kv_serde kv_sval' --test tracing_macros
+      - name: Callsite metadata and shared section
+        run: cargo test --features 'std tracing-macros kv' --lib tracing_macros::tests

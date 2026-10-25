@@ -7,16 +7,15 @@
 //
 // Compatibility boundaries (enabled only with feature "tracing-macros"):
 //
-// * Fixed target literals become real tracing callsite targets. Other target
-//   expressions can be runtime strings, which tracing cannot put into static
-//   metadata. They instead use the caller's module as target and are recorded
-//   in a string field named log.target. This changes target-based filtering.
+// * Literal and concat!(...) targets remain static tracing targets.
+//   Other target expressions use the original log backend to avoid changing
+//   target-based filtering; they get a NonLiteralTarget diagnostic entry.
 // * Dynamic levels use a match with one static tracing callsite per level.
 //   This preserves log! Level expressions (evaluated once), but different
 //   levels at one source location have different tracing callsite identities.
 // * Explicit logger: arguments still use log's original backend. There is no
 //   way to send a native tracing event to an arbitrary log::Log instance.
-//   These are the only log! invocations that intentionally do not emit tracing.
+//   Dynamic KV key names also fall back to log (with diagnostic records).
 // * The log::set_logger, log::logger, log::max_level and log::set_max_level
 //   runtime APIs still exist, but do not affect native tracing emission.
 //   Static log max_level_* feature filters DO remain in effect.
@@ -24,11 +23,130 @@
 //   formatted via log::kv::Value (Display). Primitive types are therefore
 //   not preserved as typed tracing values. Serde/sval structures are not
 //   recursively captured.
-//   Dynamic KV key *names* cannot become tracing callsite field names.
+//   Dynamic KV key names fall back to the log backend with a diagnostic entry.
 // * Large callsite field sets may exceed subscriber or formatter limitations.
 // * The bridge does not preserve the possibility of using native log::Log
 //   and tracing subscribers simultaneously for a single macro invocation.
 //   This implementation depends only on tracing-core (never on tracing).
+
+/// Emit a diagnostic entry in the fallback-only table and execute the
+/// original log backend. Every unsupported form that can be logged normally
+/// must go through here rather than bypassing the diagnostic table.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __log_tracing_fallback {
+    (logger: $logger:expr, target: $target:expr, level: $lvl:expr,
+        reason: $reason:expr,
+        $($key:tt $(:$capture:tt)? $(= $value:expr)?),+;
+        $fmt:expr $(, $($fmt_arg:tt)*)?
+    ) => {{
+        static __LOG_FALLBACK_SOURCE: &str =
+            $crate::__tracing_core::__tracing_capture_source!(
+                []; $fmt $(, $($fmt_arg)*)?
+            );
+        $crate::__tracing_core::__tracing_record_log_fallback!(
+            level: $lvl, target: $target, reason: $reason,
+            template: $crate::__tracing_core::__macro_support::Option::Some($fmt),
+            source: $crate::__tracing_core::__macro_support::Option::Some(
+                __LOG_FALLBACK_SOURCE
+            )
+        );
+        $crate::__log!(
+            logger: $logger, target: $target, $lvl,
+            $($key $(:$capture)? $(= $value)?),+;
+            $fmt $(, $($fmt_arg)*)?
+        )
+    }};
+    (logger: $logger:expr, target: $target:expr, level: $lvl:expr,
+        reason: $reason:expr, $fmt:expr $(, $($fmt_arg:tt)*)?
+    ) => {{
+        static __LOG_FALLBACK_SOURCE: &str =
+            $crate::__tracing_core::__tracing_capture_source!(
+                []; $fmt $(, $($fmt_arg)*)?
+            );
+        $crate::__tracing_core::__tracing_record_log_fallback!(
+            level: $lvl, target: $target, reason: $reason,
+            template: $crate::__tracing_core::__macro_support::Option::Some($fmt),
+            source: $crate::__tracing_core::__macro_support::Option::Some(
+                __LOG_FALLBACK_SOURCE
+            )
+        );
+        $crate::__log!(
+            logger: $logger, target: $target, $lvl,
+            $fmt $(, $($fmt_arg)*)?
+        )
+    }};
+}
+
+/// A KV field name must be a static identifier or string literal to become
+/// tracing callsite metadata. The first dynamic name causes the *entire*
+/// call to fall back to log; the original arguments remain intact.
+#[cfg(feature = "kv")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __log_tracing_kv_scan {
+    (
+        emit: $emit:ident, target: $target:expr,
+        emit_level: $emit_level:expr, log_level: $log_level:expr,
+        fields: [$($field:tt)*], original: [$($original:tt)*],
+        remaining: [], fmt: [$($fmt:tt)+]
+    ) => {
+        $crate::$emit!(
+            target: $target, level: $emit_level,
+            fields: [$($field)*], $($fmt)+
+        )
+    };
+    (
+        emit: $emit:ident, target: $target:expr,
+        emit_level: $emit_level:expr, log_level: $log_level:expr,
+        fields: [$($field:tt)*], original: [$($original:tt)*],
+        remaining: [$key:ident $(:$capture:tt)? $(= $value:expr)?, $($rest:tt)*],
+        fmt: [$($fmt:tt)+]
+    ) => {
+        $crate::__log_tracing_kv_scan!(
+            emit: $emit, target: $target,
+            emit_level: $emit_level, log_level: $log_level,
+            fields: [
+                $($field)*
+                $key = %$crate::__log_value!($key $(:$capture)? = $($value)?),
+            ],
+            original: [$($original)*], remaining: [$($rest)*],
+            fmt: [$($fmt)+]
+        )
+    };
+    (
+        emit: $emit:ident, target: $target:expr,
+        emit_level: $emit_level:expr, log_level: $log_level:expr,
+        fields: [$($field:tt)*], original: [$($original:tt)*],
+        remaining: [$key:literal $(:$capture:tt)? $(= $value:expr)?, $($rest:tt)*],
+        fmt: [$($fmt:tt)+]
+    ) => {
+        $crate::__log_tracing_kv_scan!(
+            emit: $emit, target: $target,
+            emit_level: $emit_level, log_level: $log_level,
+            fields: [
+                $($field)*
+                $key = %$crate::__log_value!($key $(:$capture)? = $($value)?),
+            ],
+            original: [$($original)*], remaining: [$($rest)*],
+            fmt: [$($fmt)+]
+        )
+    };
+    (
+        emit: $emit:ident, target: $target:expr,
+        emit_level: $emit_level:expr, log_level: $log_level:expr,
+        fields: [$($field:tt)*], original: [$($original:tt)*],
+        remaining: [$key:tt $(:$capture:tt)? $(= $value:expr)?, $($rest:tt)*],
+        fmt: [$($fmt:tt)+]
+    ) => {
+        $crate::__log_tracing_fallback!(
+            logger: $crate::__log_logger!(__log_global_logger),
+            target: $target, level: $log_level,
+            reason: $crate::__tracing_core::callsite_table::LogFallbackReason::DynamicKey,
+            $($original)*; $($fmt)+
+        )
+    };
+}
 
 /// Builds a real tracing-core callsite and emits an event through the active
 /// dispatcher. Expanding in the caller's source (rather than a function) is
@@ -182,16 +300,18 @@ macro_rules! __log_tracing_fixed_kv {
     (target: $target:expr, log_level: $log_lvl:expr, tracing_level: $tracing_lvl:expr,
         fields: [$($extra:tt)*],
         $($key:tt $(:$capture:tt)? $(= $value:expr)?),+; $($fmt:tt)+
-    ) => {
-        $crate::__log_tracing_fixed!(
-            target: $target, log_level: $log_lvl, tracing_level: $tracing_lvl,
-            fields: [
-                $($extra)*
-                $( $key = %$crate::__log_value!($key $(:$capture)? = $($value)?), )+
-            ],
-            $($fmt)+
-        )
-    };
+    ) => {{
+        if $log_lvl <= $crate::STATIC_MAX_LEVEL {
+            $crate::__log_tracing_kv_scan!(
+                emit: __log_tracing_core_event,
+                target: $target, emit_level: $tracing_lvl, log_level: $log_lvl,
+                fields: [$($extra)*],
+                original: [$($key $(:$capture)? $(= $value)?),+],
+                remaining: [$($key $(:$capture)? $(= $value)?,)+],
+                fmt: [$($fmt)+]
+            )
+        }
+    }};
 }
 
 #[cfg(not(feature = "kv"))]
@@ -233,15 +353,13 @@ macro_rules! __log_tracing_kv {
     (target: $target:expr, $lvl:expr, fields: [$($extra:tt)*],
         $($key:tt $(:$capture:tt)? $(= $value:expr)?),+; $($fmt:tt)+
     ) => {
-        $crate::__log_tracing_emit!(
-            target: $target, level: $lvl,
-            fields: [
-                $($extra)*
-                $(
-                    $key = %$crate::__log_value!($key $(:$capture)? = $($value)?),
-                )+
-            ],
-            $($fmt)+
+        $crate::__log_tracing_kv_scan!(
+            emit: __log_tracing_emit,
+            target: $target, emit_level: $lvl, log_level: $lvl,
+            fields: [$($extra)*],
+            original: [$($key $(:$capture)? $(= $value)?),+],
+            remaining: [$($key $(:$capture)? $(= $value)?,)+],
+            fmt: [$($fmt)+]
         )
     };
 }
@@ -260,15 +378,19 @@ macro_rules! __log_tracing_kv {
 #[macro_export]
 macro_rules! log {
     (logger: $logger:expr, target: $target:expr, $lvl:expr, $($arg:tt)+) => {
-        $crate::__log!(
+        $crate::__log_tracing_fallback!(
             logger: $crate::__log_logger!($logger),
-            target: $target, $lvl, $($arg)+
+            target: $target, level: $lvl,
+            reason: $crate::__tracing_core::callsite_table::LogFallbackReason::ExplicitLogger,
+            $($arg)+
         )
     };
     (logger: $logger:expr, $lvl:expr, $($arg:tt)+) => {
-        $crate::__log!(
+        $crate::__log_tracing_fallback!(
             logger: $crate::__log_logger!($logger),
-            target: $crate::__private_api::module_path!(), $lvl, $($arg)+
+            target: $crate::__private_api::module_path!(), level: $lvl,
+            reason: $crate::__tracing_core::callsite_table::LogFallbackReason::ExplicitLogger,
+            $($arg)+
         )
     };
     (target: $target:literal, $lvl:expr, $($arg:tt)+) => {
@@ -276,10 +398,17 @@ macro_rules! log {
             target: $target, $lvl, fields: [], $($arg)+
         )
     };
-    (target: $target:expr, $lvl:expr, $($arg:tt)+) => {
+    (target: concat!($($target_parts:tt)*), $lvl:expr, $($arg:tt)+) => {
         $crate::__log_tracing!(
-            target: $crate::__private_api::module_path!(), $lvl,
-            fields: ["log.target" = %$target,], $($arg)+
+            target: concat!($($target_parts)*), $lvl, fields: [], $($arg)+
+        )
+    };
+    (target: $target:expr, $lvl:expr, $($arg:tt)+) => {
+        $crate::__log_tracing_fallback!(
+            logger: $crate::__log_logger!(__log_global_logger),
+            target: $target, level: $lvl,
+            reason: $crate::__tracing_core::callsite_table::LogFallbackReason::NonLiteralTarget,
+            $($arg)+
         )
     };
     ($lvl:expr, $($arg:tt)+) => {
@@ -306,12 +435,20 @@ macro_rules! error {
             fields: [], $($arg)+
         )
     };
-    (target: $target:expr, $($arg:tt)+) => {
+    (target: concat!($($target_parts:tt)*), $($arg:tt)+) => {
         $crate::__log_tracing_fixed!(
-            target: $crate::__private_api::module_path!(),
+            target: concat!($($target_parts)*),
             log_level: $crate::Level::Error,
             tracing_level: $crate::__tracing_core::Level::ERROR,
-            fields: ["log.target" = %$target,], $($arg)+
+            fields: [], $($arg)+
+        )
+    };
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::__log_tracing_fallback!(
+            logger: $crate::__log_logger!(__log_global_logger),
+            target: $target, level: $crate::Level::Error,
+            reason: $crate::__tracing_core::callsite_table::LogFallbackReason::NonLiteralTarget,
+            $($arg)+
         )
     };
     ($($arg:tt)+) => {
@@ -340,12 +477,20 @@ macro_rules! warn {
             fields: [], $($arg)+
         )
     };
-    (target: $target:expr, $($arg:tt)+) => {
+    (target: concat!($($target_parts:tt)*), $($arg:tt)+) => {
         $crate::__log_tracing_fixed!(
-            target: $crate::__private_api::module_path!(),
+            target: concat!($($target_parts)*),
             log_level: $crate::Level::Warn,
             tracing_level: $crate::__tracing_core::Level::WARN,
-            fields: ["log.target" = %$target,], $($arg)+
+            fields: [], $($arg)+
+        )
+    };
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::__log_tracing_fallback!(
+            logger: $crate::__log_logger!(__log_global_logger),
+            target: $target, level: $crate::Level::Warn,
+            reason: $crate::__tracing_core::callsite_table::LogFallbackReason::NonLiteralTarget,
+            $($arg)+
         )
     };
     ($($arg:tt)+) => {
@@ -374,12 +519,20 @@ macro_rules! info {
             fields: [], $($arg)+
         )
     };
-    (target: $target:expr, $($arg:tt)+) => {
+    (target: concat!($($target_parts:tt)*), $($arg:tt)+) => {
         $crate::__log_tracing_fixed!(
-            target: $crate::__private_api::module_path!(),
+            target: concat!($($target_parts)*),
             log_level: $crate::Level::Info,
             tracing_level: $crate::__tracing_core::Level::INFO,
-            fields: ["log.target" = %$target,], $($arg)+
+            fields: [], $($arg)+
+        )
+    };
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::__log_tracing_fallback!(
+            logger: $crate::__log_logger!(__log_global_logger),
+            target: $target, level: $crate::Level::Info,
+            reason: $crate::__tracing_core::callsite_table::LogFallbackReason::NonLiteralTarget,
+            $($arg)+
         )
     };
     ($($arg:tt)+) => {
@@ -408,12 +561,20 @@ macro_rules! debug {
             fields: [], $($arg)+
         )
     };
-    (target: $target:expr, $($arg:tt)+) => {
+    (target: concat!($($target_parts:tt)*), $($arg:tt)+) => {
         $crate::__log_tracing_fixed!(
-            target: $crate::__private_api::module_path!(),
+            target: concat!($($target_parts)*),
             log_level: $crate::Level::Debug,
             tracing_level: $crate::__tracing_core::Level::DEBUG,
-            fields: ["log.target" = %$target,], $($arg)+
+            fields: [], $($arg)+
+        )
+    };
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::__log_tracing_fallback!(
+            logger: $crate::__log_logger!(__log_global_logger),
+            target: $target, level: $crate::Level::Debug,
+            reason: $crate::__tracing_core::callsite_table::LogFallbackReason::NonLiteralTarget,
+            $($arg)+
         )
     };
     ($($arg:tt)+) => {
@@ -442,12 +603,20 @@ macro_rules! trace {
             fields: [], $($arg)+
         )
     };
-    (target: $target:expr, $($arg:tt)+) => {
+    (target: concat!($($target_parts:tt)*), $($arg:tt)+) => {
         $crate::__log_tracing_fixed!(
-            target: $crate::__private_api::module_path!(),
+            target: concat!($($target_parts)*),
             log_level: $crate::Level::Trace,
             tracing_level: $crate::__tracing_core::Level::TRACE,
-            fields: ["log.target" = %$target,], $($arg)+
+            fields: [], $($arg)+
+        )
+    };
+    (target: $target:expr, $($arg:tt)+) => {
+        $crate::__log_tracing_fallback!(
+            logger: $crate::__log_logger!(__log_global_logger),
+            target: $target, level: $crate::Level::Trace,
+            reason: $crate::__tracing_core::callsite_table::LogFallbackReason::NonLiteralTarget,
+            $($arg)+
         )
     };
     ($($arg:tt)+) => {
@@ -543,19 +712,20 @@ macro_rules! log_enabled {
     (target: $target:literal, $lvl:expr) => {
         $crate::__log_tracing_enabled!(target: $target, $lvl)
     };
-    (target: $target:expr, $lvl:expr) => {{
-        let __log_level = $lvl;
-        if __log_level > $crate::STATIC_MAX_LEVEL {
-            false
-        } else {
-            // Preserve evaluation of the caller's target expression, even
-            // though tracing cannot filter on a runtime callsite target.
-            let _ = &$target;
-            $crate::__log_tracing_enabled!(
-                target: $crate::__private_api::module_path!(), __log_level
-            )
-        }
-    }};
+    (target: concat!($($target_parts:tt)*), $lvl:expr) => {
+        $crate::__log_tracing_enabled!(
+            target: concat!($($target_parts)*), $lvl
+        )
+    };
+    // A runtime target cannot be queried against static tracing metadata.
+    // Delegate to the original log enabled query, without an event record:
+    // log_enabled! is a query, not a log event.
+    (target: $target:expr, $lvl:expr) => {
+        $crate::__log_enabled!(
+            logger: $crate::__log_logger!(__log_global_logger),
+            target: $target, $lvl
+        )
+    };
     ($lvl:expr) => {
         $crate::__log_tracing_enabled!(
             target: $crate::__private_api::module_path!(), $lvl

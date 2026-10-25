@@ -360,17 +360,22 @@
 //!
 //! Most format arguments and KV capture specifiers work. The exceptions are:
 //!
-//! * A non-literal `target:` expression is captured as the `log.target` field.
-//!   The tracing metadata target is the caller's module, so target filtering
-//!   differs. This includes compile-time expressions that are not literals.
+//! * Literal and `concat!(...)` targets become native tracing targets.
+//!   Other `target:` expressions fall back to log, with a diagnostic record.
+//!   Macro-expanded constants other than `concat!(...)` may unnecessarily
+//!   fall back because `macro_rules!` cannot generally establish constness.
 //! * `logger:` still uses the original log backend: a custom `Log` instance
 //!   cannot receive an ordinary tracing event.
 //! * The global `log` logger and runtime max level do not affect tracing
 //!   subscribers. Compile-time max-level feature filters still apply.
 //! * KV keys map to tracing fields, but their values use formatted Display
 //!   capture instead of native tracing primitive types. Serde/sval structure
-//!   is not preserved. Runtime KV key names and more than 32 fields at a
-//!   callsite are unsupported.
+//!   is not preserved. Dynamic KV key names fall back to the original log
+//!   backend, with a reason-coded record in the fallback metadata table.
+//! * Fallbacks (explicit `logger:`, nonliteral targets, or dynamic KV keys) are listed by
+//!   `tracing_core::callsite_table::log_fallback_records()` with source,
+//!   template and a reason code. This separate table does not imply that a
+//!   native tracing event is emitted.
 //! * Emission uses the shared tracing-core fork for both event dispatch and
 //!   the link-time callsite metadata table. The consuming application must
 //!   use the same tracing-core revision as its tracing dependency so that
