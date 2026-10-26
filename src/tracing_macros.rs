@@ -200,22 +200,17 @@ macro_rules! __log_tracing_core_event {
                         |dispatch| dispatch.enabled(&__META)
                     ))
             {
-                // An immediately invoked closure keeps temporaries in
-                // format_args! (and KV expressions) alive through dispatch.
-                (|__fields: $crate::__tracing_core::field::ValueSet<'_>| {
-                    $crate::__tracing_core::Event::dispatch(&__META, &__fields);
-                })(__META.fields().value_set_all(&[
-                    $crate::__tracing_core::__macro_support::Option::Some(
-                        &format_args!($fmt $(, $($fmt_arg)*)?)
-                            as &dyn $crate::__tracing_core::field::Value
-                    ),
-                    $(
-                        $crate::__tracing_core::__macro_support::Option::Some(
-                            &$crate::__tracing_core::field::display(&$value)
-                                as &dyn $crate::__tracing_core::field::Value
-                        ),
-                    )*
-                ]));
+                // Share tracing's scoped field parser: the message reaches
+                // visit_format with typed arguments and temporary owners live
+                // through dispatch, without moving KV control flow into a closure.
+                $crate::__tracing_core::__tracing_with_formatted_fields!(
+                    __META.fields(),
+                    |__fields: $crate::__tracing_core::field::ValueSet<'_>| {
+                        $crate::__tracing_core::Event::dispatch(&__META, &__fields);
+                    },
+                    [$fmt $(, $($fmt_arg)*)?],
+                    {$($key = %$value,)*}
+                );
             }
         }
     }};
@@ -325,7 +320,7 @@ macro_rules! __log_tracing_fixed_kv {
 }
 
 /// Convert log KV grammar to tracing fields, keeping the raw formatting
-/// tokens available for format_args! at the original callsite.
+/// tokens available for inspectable formatting at the original callsite.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __log_tracing {

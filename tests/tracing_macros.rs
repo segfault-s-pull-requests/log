@@ -189,3 +189,180 @@ fn explicit_logger_and_kv_preserves_original_backend() {
     let logger = Logger;
     info!(logger: logger, key = 17; "with kv {}", 42);
 }
+
+// Unlike a text-only subscriber, this visitor fails if a native message falls
+// back to fmt::Arguments/record_debug. No formatter runs before visit_format.
+#[cfg(feature = "std")]
+mod inspectable {
+    use super::*;
+    use log::__tracing_core::{
+        self as core,
+        field::{Field, Format, Visit},
+        span, Event, Metadata, Subscriber,
+    };
+    use std::{
+        fmt,
+        sync::{Arc, Mutex},
+    };
+
+    #[derive(Debug, PartialEq)]
+    struct Message {
+        level: core::Level,
+        template: &'static str,
+        types: Vec<&'static str>,
+        text: String,
+    }
+
+    #[derive(Clone)]
+    struct Inspect {
+        enabled: bool,
+        messages: Arc<Mutex<Vec<Message>>>,
+    }
+
+    impl Visit for Inspect {
+        fn visit_format(&mut self, field: &Field, value: &Format<'_>) {
+            assert_eq!(field.name(), "message");
+            // The event fills in its level after recording the borrowed view.
+            self.messages.lock().unwrap().push(Message {
+                level: core::Level::INFO,
+                template: value.template(),
+                types: value
+                    .args()
+                    .iter()
+                    .map(|arg| arg.value().type_name())
+                    .collect(),
+                text: value.render().unwrap(),
+            });
+        }
+
+        fn record_debug(&mut self, field: &Field, _: &dyn fmt::Debug) {
+            assert_ne!(
+                field.name(),
+                "message",
+                "native messages must use visit_format"
+            );
+        }
+    }
+
+    impl Subscriber for Inspect {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            self.enabled
+        }
+        fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
+            span::Id::from_u64(1)
+        }
+        fn event(&self, event: &Event<'_>) {
+            event.record(&mut self.clone());
+            self.messages.lock().unwrap().last_mut().unwrap().level = *event.metadata().level();
+        }
+        fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
+        fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
+        fn enter(&self, _: &span::Id) {}
+        fn exit(&self, _: &span::Id) {}
+    }
+
+    #[test]
+    fn every_level_delivers_typed_formats_and_keeps_temporary_owners_alive() {
+        let subscriber = Inspect {
+            enabled: true,
+            messages: Arc::default(),
+        };
+        core::dispatcher::with_default(&core::Dispatch::new(subscriber.clone()), || {
+            let number = 31u32;
+            error!("error {number}");
+            warn!("warn {}", number);
+            info!("literal");
+            debug!("debug {number:#06x}");
+            trace!("trace {}", String::from("temporary").as_str());
+            // Runtime levels, template macros, and named width operands use
+            // the same representation as the fixed-severity public macros.
+            for level in [
+                Level::Error,
+                Level::Warn,
+                Level::Info,
+                Level::Debug,
+                Level::Trace,
+            ] {
+                log!(
+                    level,
+                    concat!("dynamic ", "{number:>width$}"),
+                    number = number,
+                    width = 4usize
+                );
+            }
+        });
+        let messages = subscriber.messages.lock().unwrap();
+        assert_eq!(messages.len(), 10);
+        assert_eq!(messages[0].types, ["u32"]);
+        assert_eq!(messages[1].types, ["u32"]);
+        assert!(messages[2].types.is_empty());
+        assert_eq!(messages[3].types, ["u32"]);
+        assert_eq!(messages[3].text, "debug 0x001f");
+        assert_eq!(messages[4].types, ["str"]);
+        assert_eq!(messages[4].text, "trace temporary");
+        for (message, level) in messages[5..].iter().zip([
+            core::Level::ERROR,
+            core::Level::WARN,
+            core::Level::INFO,
+            core::Level::DEBUG,
+            core::Level::TRACE,
+        ]) {
+            assert_eq!(message.level, level);
+            assert_eq!(message.template, "dynamic {number:>width$}");
+            assert_eq!(message.types, ["u32", "usize"]);
+            assert_eq!(message.text, "dynamic   31");
+        }
+    }
+
+    #[test]
+    fn disabled_events_do_not_evaluate_message_arguments() {
+        let subscriber = Inspect {
+            enabled: false,
+            messages: Arc::default(),
+        };
+        core::dispatcher::with_default(&core::Dispatch::new(subscriber.clone()), || {
+            let argument = || -> u32 { panic!("disabled message argument evaluated") };
+            debug!("disabled {}", argument());
+            log!(Level::Trace, "disabled {}", argument());
+        });
+        assert!(subscriber.messages.lock().unwrap().is_empty());
+    }
+
+    #[cfg(feature = "kv")]
+    #[test]
+    fn kv_expressions_keep_evaluation_order_and_caller_control_flow() {
+        use std::cell::RefCell;
+
+        // KV expressions must not migrate into inspect_format's callback,
+        // where return and ? would target the callback instead of this caller.
+        fn emit(result: Result<u32, ()>) -> Result<(), ()> {
+            info!(number = result?; "question {}", 1u32);
+            info!(number = {
+                if result == Ok(7) { return Ok(()); }
+                9u32
+            }; "return {}", 2u32);
+            Err(())
+        }
+
+        let subscriber = Inspect {
+            enabled: true,
+            messages: Arc::default(),
+        };
+        core::dispatcher::with_default(&core::Dispatch::new(subscriber.clone()), || {
+            let order = RefCell::new(Vec::new());
+            let mark = |name, value| {
+                order.borrow_mut().push(name);
+                value
+            };
+            info!(number = mark("kv", 7u32); "message {}", mark("message", 31u32));
+            assert_eq!(*order.borrow(), ["message", "kv"]);
+            assert_eq!(emit(Err(())), Err(()));
+            assert_eq!(emit(Ok(7)), Ok(()));
+        });
+        let messages = subscriber.messages.lock().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].types, ["u32"]);
+        assert_eq!(messages[0].text, "message 31");
+        assert_eq!(messages[1].text, "question 1");
+    }
+}
